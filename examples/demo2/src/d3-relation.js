@@ -83,8 +83,16 @@ export default class D3Relation {
         this.dependsNode = [];
         this.dependsLinkAndText = [];
 
+        // 搜索相关状态
+        this.searchResults = [];
+        this.selectedIndex = -1;
+        this.currentTransform = d3.zoomIdentity;
+
         // 创建力学模拟器
         this.initSimulation()
+
+        // 初始化搜索功能
+        this.initSearch();
 
     }
 
@@ -527,6 +535,236 @@ export default class D3Relation {
     // 是否是移动端
     isMobile() {
         return false;
+    }
+
+    // 初始化搜索功能
+    initSearch() {
+        const that = this;
+        const $input = $('.search-input');
+        const $clear = $('.search-clear');
+        const $results = $('.search-results');
+
+        // 计算每个节点的关系数量
+        this.calculateRelationCounts();
+
+        // 输入事件
+        $input.on('input', function() {
+            const query = $(this).val().trim();
+            if (query) {
+                $clear.addClass('show');
+                that.searchNodes(query);
+            } else {
+                $clear.removeClass('show');
+                that.hideResults();
+            }
+        });
+
+        // 清除按钮
+        $clear.on('click', function() {
+            $input.val('');
+            $clear.removeClass('show');
+            that.hideResults();
+            that.selectedIndex = -1;
+        });
+
+        // 键盘导航
+        $input.on('keydown', function(e) {
+            const $items = $results.find('.search-result-item');
+
+            if (e.keyCode === 40) { // 下箭头
+                e.preventDefault();
+                if (that.searchResults.length > 0) {
+                    that.selectedIndex = Math.min(that.selectedIndex + 1, that.searchResults.length - 1);
+                    that.updateSelection($items);
+                }
+            } else if (e.keyCode === 38) { // 上箭头
+                e.preventDefault();
+                if (that.searchResults.length > 0) {
+                    that.selectedIndex = Math.max(that.selectedIndex - 1, 0);
+                    that.updateSelection($items);
+                }
+            } else if (e.keyCode === 13) { // 回车
+                e.preventDefault();
+                if (that.selectedIndex >= 0 && that.selectedIndex < that.searchResults.length) {
+                    that.selectNode(that.searchResults[that.selectedIndex]);
+                    that.hideResults();
+                }
+            } else if (e.keyCode === 27) { // ESC
+                that.hideResults();
+            }
+        });
+
+        // 点击外部关闭
+        $(document).on('click', function(e) {
+            if (!$(e.target).closest('.search-container').length) {
+                that.hideResults();
+            }
+        });
+
+        // 聚焦时如果有内容则显示结果
+        $input.on('focus', function() {
+            const query = $(this).val().trim();
+            if (query && that.searchResults.length > 0) {
+                $results.addClass('show');
+            }
+        });
+    }
+
+    // 计算节点关系数量
+    calculateRelationCounts() {
+        this.config.nodes.forEach(node => {
+            node.relationCount = 0;
+        });
+
+        this.config.links.forEach(link => {
+            const sourceId = link.source.role_id || (link.source.index !== undefined ? this.config.nodes[link.source.index]?.role_id : null);
+            const targetId = link.target.role_id || (link.target.index !== undefined ? this.config.nodes[link.target.index]?.role_id : null);
+
+            // 根据源节点和目标节点统计关系数量
+            this.config.nodes.forEach(node => {
+                if (node.role_id === sourceId || node.role_id === targetId) {
+                    node.relationCount++;
+                }
+            });
+        });
+    }
+
+    // 搜索节点
+    searchNodes(query) {
+        const that = this;
+        const $results = $('.search-results');
+
+        // 过滤匹配的节点
+        this.searchResults = this.config.nodes.filter(node => {
+            return node.name && node.name.toLowerCase().indexOf(query.toLowerCase()) !== -1;
+        });
+
+        // 重置选中索引
+        this.selectedIndex = -1;
+
+        if (this.searchResults.length === 0) {
+            $results.html('<div class="search-no-results">未找到匹配的节点</div>');
+        } else {
+            // 渲染结果列表
+            let html = '';
+            this.searchResults.forEach((node, index) => {
+                const highlightedName = this.highlightText(node.name, query);
+                html += `
+                    <div class="search-result-item" data-index="${index}">
+                        <span class="result-name">${highlightedName}</span>
+                        <span class="result-relation-count">${node.relationCount} 个关系</span>
+                    </div>
+                `;
+            });
+            $results.html(html);
+
+            // 绑定点击和悬浮事件
+            $results.find('.search-result-item')
+                .on('click', function() {
+                    const index = parseInt($(this).data('index'));
+                    that.selectNode(that.searchResults[index]);
+                    that.hideResults();
+                })
+                .on('mouseenter', function() {
+                    that.selectedIndex = parseInt($(this).data('index'));
+                    $(this).siblings().removeClass('selected');
+                    $(this).addClass('selected');
+                });
+        }
+
+        $results.addClass('show');
+    }
+
+    // 高亮匹配文本
+    highlightText(text, query) {
+        if (!query) return text;
+        const regex = new RegExp(`(${this.escapeRegExp(query)})`, 'gi');
+        return text.replace(regex, '<span class="highlight">$1</span>');
+    }
+
+    // 转义正则特殊字符
+    escapeRegExp(string) {
+        return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    // 更新选中状态
+    updateSelection($items) {
+        $items.removeClass('selected');
+        $items.eq(this.selectedIndex).addClass('selected');
+
+        // 确保选中项可见
+        const $selected = $items.eq(this.selectedIndex);
+        if ($selected.length) {
+            const container = $('.search-results')[0];
+            const item = $selected[0];
+            if (item.offsetTop + item.offsetHeight > container.scrollTop + container.clientHeight) {
+                container.scrollTop = item.offsetTop + item.offsetHeight - container.clientHeight;
+            } else if (item.offsetTop < container.scrollTop) {
+                container.scrollTop = item.offsetTop;
+            }
+        }
+    }
+
+    // 隐藏结果列表
+    hideResults() {
+        $('.search-results').removeClass('show');
+    }
+
+    // 选中节点 - 定位并聚焦
+    selectNode(node) {
+        if (!node || node.x === undefined || node.y === undefined) return;
+
+        const that = this;
+        const width = this.config.width;
+        const height = this.config.height;
+
+        // 计算缩放和平移，使节点居中
+        const scale = 1.2;
+        const x = width / 2 - node.x * scale;
+        const y = height / 2 - node.y * scale;
+
+        // 创建新的 transform
+        const transform = d3.zoomIdentity.translate(x, y).scale(scale);
+        this.currentTransform = transform;
+
+        // 应用动画过渡
+        this.SVG.transition()
+            .duration(500)
+            .call(d3.zoom().transform, transform)
+            .on('end', function() {
+                // 更新 relMap_g 的 transform
+                that.relMap_g.attr('transform', transform);
+            });
+
+        // 高亮选中的节点及其关系
+        this.highlightObject(node);
+
+        // 高亮节点的外圈闪烁效果
+        const $circle = this.circles.filter(d => d.role_id === node.role_id);
+        if (!$circle.empty()) {
+            // 添加闪烁效果
+            $circle
+                .transition()
+                .duration(200)
+                .attr('stroke-width', 12)
+                .attr('stroke', '#4a90d9')
+                .transition()
+                .duration(200)
+                .attr('stroke-width', this.config.strokeWidth)
+                .attr('stroke', '#ccf1fc')
+                .transition()
+                .duration(200)
+                .attr('stroke-width', 12)
+                .attr('stroke', '#4a90d9')
+                .transition()
+                .duration(200)
+                .attr('stroke-width', this.config.strokeWidth)
+                .attr('stroke', '#ccf1fc');
+        }
+
+        // 清空搜索框
+        $('.search-input').val('');
+        $('.search-clear').removeClass('show');
     }
 
 }

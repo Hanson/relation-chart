@@ -54,7 +54,7 @@ const defaultConfig = {
     links: [],                  // 线数组
     isHighLight: true,        // 是否启动 鼠标 hover 到节点上高亮与节点有关的节点，其他无关节点透明的功能
     isScale: true,              // 是否启用缩放平移zoom功能
-    scaleExtent: [0.5, 1.5],    // 缩放的比例尺
+    scaleExtent: [0.01, 3],      // 缩放的比例尺 (扩展范围：最小0.01倍，最大3倍)
     chargeStrength: -300,        // 万有引力
     collide: 100,                 // 碰撞力的大小 （节点之间的间距）
     nodeWidth: 160,             // 每个node节点所占的宽度，正方形
@@ -66,6 +66,14 @@ const defaultConfig = {
     linkColor: '#bad4ed',        // 链接线默认的颜色
     strokeColor: '#7ecef4',     // 头像外围包裹的颜色
     strokeWidth: 3,             // 头像外围包裹的宽度
+    showToolbar: true,          // 是否显示工具栏
+    searchPlaceholder: '搜索节点...', // 搜索框占位文字
+    // 透明度配置 - 根据关系距离设置不同透明度
+    opacityLevels: {
+        direct: 1,           // 直接关联节点（1度关系）
+        unrelated: 0.15,     // 无关系节点（包括二度及更远）
+        normal: 1            // 正常状态
+    },
 }
 
 export default class RelationChart {
@@ -99,8 +107,598 @@ export default class RelationChart {
         this.dependsNode = [];
         this.dependsLinkAndText = [];
 
+        // 当前缩放状态
+        this.currentTransform = d3.zoomIdentity;
+
+        // 聚焦模式状态
+        this.focusedNode = null;
+        this.isFocusMode = false;
+
+        // 搜索结果和选中索引
+        this.currentSearchResults = [];
+        this.selectedIndex = -1;
+
+        // 创建工具栏
+        if (this.config.showToolbar) {
+            this.initToolbar();
+        }
+
         // 创建力学模拟器
         this.initSimulation()
+    }
+
+    // 初始化工具栏
+    initToolbar() {
+        const that = this;
+
+        // 创建工具栏容器
+        this.toolbar = this.map.append('div')
+            .attr('class', 'relation-chart-toolbar')
+            .style('position', 'absolute')
+            .style('top', '10px')
+            .style('left', '10px')
+            .style('z-index', '1000')
+            .style('display', 'flex')
+            .style('gap', '8px')
+            .style('align-items', 'center')
+            .style('background', 'rgba(255, 255, 255, 0.95)')
+            .style('padding', '8px 12px')
+            .style('border-radius', '8px')
+            .style('box-shadow', '0 2px 12px rgba(0, 0, 0, 0.15)')
+            .style('font-family', '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif');
+
+        // 缩小按钮
+        this.toolbar.append('button')
+            .attr('class', 'toolbar-btn zoom-out')
+            .attr('title', '缩小')
+            .style('width', '32px')
+            .style('height', '32px')
+            .style('border', '1px solid #d9d9d9')
+            .style('border-radius', '6px')
+            .style('background', '#fff')
+            .style('cursor', 'pointer')
+            .style('font-size', '16px')
+            .style('display', 'flex')
+            .style('align-items', 'center')
+            .style('justify-content', 'center')
+            .style('transition', 'all 0.2s')
+            .html('−')
+            .on('click', () => this.zoomOut())
+            .on('mouseover', function() { d3.select(this).style('background', '#f5f5f5'); })
+            .on('mouseout', function() { d3.select(this).style('background', '#fff'); });
+
+        // 缩放比例输入框（支持手动输入）
+        this.zoomDisplay = this.toolbar.append('input')
+            .attr('type', 'text')
+            .attr('class', 'zoom-display')
+            .attr('title', '输入百分比后按回车确认')
+            .style('width', '55px')
+            .style('height', '28px')
+            .style('text-align', 'center')
+            .style('font-size', '13px')
+            .style('color', '#666')
+            .style('border', '1px solid #d9d9d9')
+            .style('border-radius', '4px')
+            .style('outline', 'none')
+            .style('padding', '0 4px')
+            .style('transition', 'all 0.2s')
+            .attr('value', '100%')
+            .on('keydown', function() {
+                const event = window.event || d3.event;
+                if (event && event.key === 'Enter') {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const value = this.value;
+                    that.handleZoomInput(value);
+                }
+            })
+            .on('focus', function() {
+                d3.select(this).style('border-color', '#40a9ff').style('box-shadow', '0 0 0 2px rgba(24, 144, 255, 0.2)');
+                // 选中时移除百分号便于编辑
+                const input = d3.select(this);
+                const val = input.node().value.replace('%', '');
+                input.node().value = val;
+                input.node().select();
+            })
+            .on('blur', function() {
+                d3.select(this).style('border-color', '#d9d9d9').style('box-shadow', 'none');
+                // 失焦时重新添加百分号
+                const input = d3.select(this);
+                const value = input.node().value.replace('%', '');
+                const numValue = parseFloat(value);
+                if (!isNaN(numValue)) {
+                    input.node().value = Math.round(numValue) + '%';
+                } else {
+                    input.node().value = Math.round(that.currentTransform.k * 100) + '%';
+                }
+            });
+
+        // 放大按钮
+        this.toolbar.append('button')
+            .attr('class', 'toolbar-btn zoom-in')
+            .attr('title', '放大')
+            .style('width', '32px')
+            .style('height', '32px')
+            .style('border', '1px solid #d9d9d9')
+            .style('border-radius', '6px')
+            .style('background', '#fff')
+            .style('cursor', 'pointer')
+            .style('font-size', '16px')
+            .style('display', 'flex')
+            .style('align-items', 'center')
+            .style('justify-content', 'center')
+            .style('transition', 'all 0.2s')
+            .html('+')
+            .on('click', () => this.zoomIn())
+            .on('mouseover', function() { d3.select(this).style('background', '#f5f5f5'); })
+            .on('mouseout', function() { d3.select(this).style('background', '#fff'); });
+
+        // 分隔线
+        this.toolbar.append('div')
+            .style('width', '1px')
+            .style('height', '24px')
+            .style('background', '#e8e8e8')
+            .style('margin', '0 4px');
+
+        // 重置按钮
+        this.toolbar.append('button')
+            .attr('class', 'toolbar-btn reset')
+            .attr('title', '重置视图')
+            .style('padding', '0 12px')
+            .style('height', '32px')
+            .style('border', '1px solid #d9d9d9')
+            .style('border-radius', '6px')
+            .style('background', '#fff')
+            .style('cursor', 'pointer')
+            .style('font-size', '13px')
+            .style('color', '#666')
+            .style('transition', 'all 0.2s')
+            .text('重置')
+            .on('click', () => this.resetView())
+            .on('mouseover', function() { d3.select(this).style('background', '#f5f5f5'); })
+            .on('mouseout', function() { d3.select(this).style('background', '#fff'); });
+
+        // 分隔线
+        this.toolbar.append('div')
+            .style('width', '1px')
+            .style('height', '24px')
+            .style('background', '#e8e8e8')
+            .style('margin', '0 4px');
+
+        // 聚焦模式按钮
+        this.focusBtn = this.toolbar.append('button')
+            .attr('class', 'toolbar-btn focus-mode')
+            .attr('title', '聚焦模式：点击节点后持续高亮其关系网')
+            .style('padding', '0 12px')
+            .style('height', '32px')
+            .style('border', '1px solid #d9d9d9')
+            .style('border-radius', '6px')
+            .style('background', '#fff')
+            .style('cursor', 'pointer')
+            .style('font-size', '13px')
+            .style('color', '#666')
+            .style('transition', 'all 0.2s')
+            .text('聚焦')
+            .on('click', () => this.toggleFocusMode())
+            .on('mouseover', function() { d3.select(this).style('background', '#f5f5f5'); })
+            .on('mouseout', function() {
+                const btn = d3.select(that.toolbar.node()).select('.focus-mode');
+                btn.style('background', that.isFocusMode ? '#e6f7ff' : '#fff');
+            });
+
+        // 分隔线
+        this.toolbar.append('div')
+            .style('width', '1px')
+            .style('height', '24px')
+            .style('background', '#e8e8e8')
+            .style('margin', '0 4px');
+
+        // 搜索容器
+        const searchContainer = this.toolbar.append('div')
+            .style('position', 'relative')
+            .style('display', 'flex')
+            .style('align-items', 'center');
+
+        // 搜索输入框
+        this.searchInput = searchContainer.append('input')
+            .attr('type', 'text')
+            .attr('class', 'search-input')
+            .attr('placeholder', this.config.searchPlaceholder)
+            .style('width', '160px')
+            .style('height', '32px')
+            .style('padding', '0 32px 0 12px')
+            .style('border', '1px solid #d9d9d9')
+            .style('border-radius', '6px')
+            .style('outline', 'none')
+            .style('font-size', '13px')
+            .style('transition', 'all 0.2s')
+            .on('input', function() { that.handleSearch(this.value); })
+            .on('keydown', function() {
+                that.handleSearchKeydown(d3.event);
+            })
+            .on('focus', function() { d3.select(this).style('border-color', '#40a9ff').style('box-shadow', '0 0 0 2px rgba(24, 144, 255, 0.2)'); })
+            .on('blur', function() { d3.select(this).style('border-color', '#d9d9d9').style('box-shadow', 'none'); });
+
+        // 搜索图标
+        searchContainer.append('span')
+            .style('position', 'absolute')
+            .style('right', '10px')
+            .style('color', '#bfbfbf')
+            .style('font-size', '14px')
+            .style('pointer-events', 'none')
+            .html('🔍');
+
+        // 搜索结果下拉 - 放在搜索容器内，显示在搜索框正下方
+        this.searchResults = searchContainer.append('div')
+            .attr('class', 'search-results')
+            .style('position', 'absolute')
+            .style('top', '36px')
+            .style('left', '0')
+            .style('z-index', '999')
+            .style('background', '#fff')
+            .style('border-radius', '6px')
+            .style('box-shadow', '0 2px 12px rgba(0, 0, 0, 0.15)')
+            .style('max-height', '200px')
+            .style('overflow-y', 'auto')
+            .style('display', 'none')
+            .style('min-width', '200px');
+
+        // 确保父容器有定位
+        const position = this.map.style('position');
+        if (!position || position === 'static') {
+            this.map.style('position', 'relative');
+        }
+    }
+
+    // 放大
+    zoomIn() {
+        this.zoomBy(1.2);
+    }
+
+    // 缩小
+    zoomOut() {
+        this.zoomBy(0.8);
+    }
+
+    // 按比例缩放
+    zoomBy(scale) {
+        const targetScale = this.currentTransform.k * scale;
+        const [minScale, maxScale] = this.config.scaleExtent;
+
+        if (targetScale < minScale || targetScale > maxScale) return;
+
+        const centerX = this.config.width / 2;
+        const centerY = this.config.height / 2;
+
+        this.SVG.transition()
+            .duration(300)
+            .call(
+                this.zoomBehavior.transform,
+                d3.zoomIdentity
+                    .translate(centerX, centerY)
+                    .scale(targetScale)
+                    .translate(-centerX, -centerY)
+            );
+    }
+
+    // 重置视图
+    resetView() {
+        this.SVG.transition()
+            .duration(500)
+            .call(this.zoomBehavior.transform, d3.zoomIdentity);
+        this.clearSearch();
+        this.clearFocus();
+    }
+
+    // 切换聚焦模式
+    toggleFocusMode() {
+        this.isFocusMode = !this.isFocusMode;
+        const btn = this.toolbar.select('.focus-mode');
+
+        if (this.isFocusMode) {
+            btn.style('background', '#e6f7ff')
+               .style('border-color', '#1890ff')
+               .style('color', '#1890ff')
+               .text('聚焦中');
+        } else {
+            btn.style('background', '#fff')
+               .style('border-color', '#d9d9d9')
+               .style('color', '#666')
+               .text('聚焦');
+            this.clearFocus();
+        }
+    }
+
+    // 清除聚焦
+    clearFocus() {
+        this.focusedNode = null;
+        // 恢复所有节点和线的透明度
+        this.SVG.selectAll('circle.circleclass')
+            .transition()
+            .duration(300)
+            .style('opacity', this.config.opacityLevels.normal);
+        this.SVG.selectAll('.edge')
+            .transition()
+            .duration(300)
+            .style('opacity', this.config.opacityLevels.normal);
+    }
+
+    // 设置聚焦节点
+    setFocusNode(node) {
+        if (!this.isFocusMode) return;
+        this.focusedNode = node;
+        this.applyDistanceHighlight(node);
+    }
+
+    // 更新缩放显示
+    updateZoomDisplay(transform) {
+        if (this.zoomDisplay) {
+            this.zoomDisplay.node().value = Math.round(transform.k * 100) + '%';
+        }
+    }
+
+    // 处理手动输入的缩放值
+    handleZoomInput(value) {
+        // 解析输入值，支持 "100"、"100%"、"1.5" 等格式
+        let numValue = parseFloat(value.replace('%', ''));
+
+        if (isNaN(numValue)) {
+            // 无效输入，恢复当前值
+            this.zoomDisplay.node().value = Math.round(this.currentTransform.k * 100) + '%';
+            return;
+        }
+
+        // 统一将输入值作为百分比处理，转换为 0-1 的缩放比例
+        // 如果值大于 1，说明是百分比形式（如 50 表示 50%）
+        // 如果值小于等于 1，说明已经是小数形式（如 0.5 表示 50%）
+        let scale;
+        if (numValue > 1) {
+            scale = numValue / 100;  // 百分比转小数
+        } else {
+            scale = numValue;  // 已经是小数
+        }
+
+        // 限制在缩放范围内
+        const [minScale, maxScale] = this.config.scaleExtent;
+        scale = Math.max(minScale, Math.min(maxScale, scale));
+
+        // 应用缩放
+        const centerX = this.config.width / 2;
+        const centerY = this.config.height / 2;
+
+        this.SVG.transition()
+            .duration(300)
+            .call(
+                this.zoomBehavior.transform,
+                d3.zoomIdentity
+                    .translate(centerX, centerY)
+                    .scale(scale)
+                    .translate(-centerX, -centerY)
+            );
+
+        // 更新显示值
+        this.zoomDisplay.node().value = Math.round(scale * 100) + '%';
+        this.zoomDisplay.node().blur();
+    }
+
+    // 计算节点的关系数量
+    getNodeRelationCount(node) {
+        if (!node) return 0;
+        const nodeIndex = node.index;
+        let count = 0;
+        this.config.links.forEach(link => {
+            if (link.source.index === nodeIndex || link.target.index === nodeIndex) {
+                count++;
+            }
+        });
+        return count;
+    }
+
+    // 处理搜索
+    handleSearch(keyword, selectFirst = false) {
+        const that = this;
+
+        if (!keyword || keyword.trim() === '') {
+            this.clearSearch();
+            return;
+        }
+
+        const lowerKeyword = keyword.toLowerCase().trim();
+        this.currentSearchResults = this.config.nodes.filter(node =>
+            node.name && node.name.toLowerCase().includes(lowerKeyword)
+        );
+
+        if (this.currentSearchResults.length === 0) {
+            this.searchResults.style('display', 'none');
+            return;
+        }
+
+        if (selectFirst && this.currentSearchResults.length > 0) {
+            this.locateNode(this.currentSearchResults[0]);
+            this.searchResults.style('display', 'none');
+            return;
+        }
+
+        // 重置选中索引
+        this.selectedIndex = -1;
+        this.renderSearchResults();
+    }
+
+    // 渲染搜索结果列表
+    renderSearchResults() {
+        const that = this;
+
+        // 显示搜索结果
+        this.searchResults
+            .style('display', 'block')
+            .html('');
+
+        this.currentSearchResults.slice(0, 10).forEach((node, index) => {
+            const relationCount = this.getNodeRelationCount(node);
+
+            this.searchResults.append('div')
+                .attr('class', 'search-result-item')
+                .attr('data-index', index)
+                .style('padding', '8px 12px')
+                .style('cursor', 'pointer')
+                .style('font-size', '13px')
+                .style('border-bottom', '1px solid #f0f0f0')
+                .style('transition', 'background 0.2s')
+                .style('display', 'flex')
+                .style('justify-content', 'space-between')
+                .style('align-items', 'center')
+                .style('background', index === this.selectedIndex ? '#e6f7ff' : '#fff')
+                .html(`
+                    <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;">${node.name}</span>
+                    <span style="color: #999; font-size: 12px; margin-left: 8px; flex-shrink: 0;">${relationCount}个关系</span>
+                `)
+                .on('click', () => {
+                    this.selectAndFocusNode(node);
+                    this.searchResults.style('display', 'none');
+                })
+                .on('mouseover', function() {
+                    that.selectedIndex = index;
+                    that.highlightSelectedItem();
+                });
+        });
+    }
+
+    // 高亮当前选中项
+    highlightSelectedItem() {
+        this.searchResults.selectAll('.search-result-item')
+            .style('background', (d, i, nodes) => {
+                const index = parseInt(d3.select(nodes[i]).attr('data-index'));
+                return index === this.selectedIndex ? '#e6f7ff' : '#fff';
+            });
+    }
+
+    // 处理键盘导航
+    handleSearchKeydown(event) {
+        if (this.currentSearchResults.length === 0) return;
+
+        if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            this.selectedIndex = Math.min(this.selectedIndex + 1, this.currentSearchResults.length - 1, 9);
+            this.highlightSelectedItem();
+            this.scrollToSelectedItem();
+        } else if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            this.selectedIndex = Math.max(this.selectedIndex - 1, 0);
+            this.highlightSelectedItem();
+            this.scrollToSelectedItem();
+        } else if (event.key === 'Enter') {
+            event.preventDefault();
+            if (this.selectedIndex >= 0 && this.selectedIndex < this.currentSearchResults.length) {
+                this.selectAndFocusNode(this.currentSearchResults[this.selectedIndex]);
+                this.searchResults.style('display', 'none');
+            } else if (this.currentSearchResults.length > 0) {
+                this.selectAndFocusNode(this.currentSearchResults[0]);
+                this.searchResults.style('display', 'none');
+            }
+        } else if (event.key === 'Escape') {
+            this.searchResults.style('display', 'none');
+        }
+    }
+
+    // 选择节点并进入聚焦模式（只高亮一级关系）
+    selectAndFocusNode(node) {
+        if (!node || node.x === undefined || node.y === undefined) {
+            console.warn('节点位置信息不可用');
+            return;
+        }
+
+        // 1. 先定位到节点
+        this.locateNode(node);
+
+        // 2. 自动开启聚焦模式
+        if (!this.isFocusMode) {
+            this.isFocusMode = true;
+            const btn = this.toolbar.select('.focus-mode');
+            btn.style('background', '#e6f7ff')
+               .style('border-color', '#1890ff')
+               .style('color', '#1890ff')
+               .text('聚焦中');
+        }
+
+        // 3. 设置聚焦节点并应用一级关系高亮
+        this.focusedNode = node;
+        this.applyDistanceHighlight(node);
+    }
+
+    // 滚动到选中项
+    scrollToSelectedItem() {
+        const items = this.searchResults.selectAll('.search-result-item').nodes();
+        if (items[this.selectedIndex]) {
+            items[this.selectedIndex].scrollIntoView({ block: 'nearest' });
+        }
+    }
+
+    // 清除搜索
+    clearSearch() {
+        if (this.searchInput) {
+            this.searchInput.node().value = '';
+        }
+        this.searchResults.style('display', 'none');
+        // 清除聚焦状态和高亮效果
+        this.focusedNode = null;
+        // 恢复所有节点和线的透明度
+        this.SVG.selectAll('circle.circleclass')
+            .transition()
+            .duration(300)
+            .style('opacity', this.config.opacityLevels.normal)
+            .attr('stroke', '#ccf1fc')
+            .attr('stroke-width', this.config.strokeWidth);
+        this.SVG.selectAll('.edge')
+            .transition()
+            .duration(300)
+            .style('opacity', this.config.opacityLevels.normal);
+    }
+
+    // 定位到指定节点（优化版：居中显示 + 高亮关系网）
+    locateNode(node) {
+        if (!node || node.x === undefined || node.y === undefined) {
+            console.warn('节点位置信息不可用，请等待布局完成后再试');
+            return;
+        }
+
+        const scale = 1.5;
+        const x = node.x;
+        const y = node.y;
+        const centerX = this.config.width / 2;
+        const centerY = this.config.height / 2;
+
+        // 计算平移量，使节点居中
+        const translateX = centerX - x * scale;
+        const translateY = centerY - y * scale;
+
+        // 应用缩放和平移（使用保存的 zoomBehavior 引用）
+        this.SVG.transition()
+            .duration(750)
+            .call(
+                this.zoomBehavior.transform,
+                d3.zoomIdentity.translate(translateX, translateY).scale(scale)
+            );
+
+        // 设置聚焦节点并应用分级透明度高亮
+        this.focusedNode = node;
+        this.applyDistanceHighlight(node);
+
+        // 额外高亮目标节点的边框（更明显的视觉效果）
+        this.SVG.selectAll('circle.circleclass')
+            .transition()
+            .duration(300)
+            .attr('stroke', (d) => {
+                if (d.role_id === node.role_id) {
+                    return '#ff4d4f'; // 目标节点用红色边框
+                }
+                return '#c5dbf0';
+            })
+            .attr('stroke-width', (d) => {
+                if (d.role_id === node.role_id) {
+                    return 6; // 目标节点边框加粗
+                }
+                return this.config.strokeWidth;
+            });
     }
 
     // 创建力学模拟器
@@ -124,16 +722,21 @@ export default class RelationChart {
             .on("tick", () => this.ticked());
 
         // 2.创建svg标签
+        // 先创建 zoom 行为，保存引用以便后续使用
+        this.zoomBehavior = d3.zoom().scaleExtent(this.config.scaleExtent).on("zoom", () => {
+            if (this.config.isScale) {
+                this.currentTransform = d3.event.transform;
+                this.relMap_g.attr("transform", d3.event.transform);
+                this.updateZoomDisplay(d3.event.transform);
+            }
+        });
+
         this.SVG = this.map.append("svg")
             .attr("class", "svgclass")
             .attr("width", this.config.width)
             .attr("height", this.config.height)
             // .transition().duration(750).call(d3.zoom().transform, d3.zoomIdentity);
-            .call(d3.zoom().scaleExtent(this.config.scaleExtent).on("zoom", () => {
-                if (this.config.isScale) {
-                    this.relMap_g.attr("transform", d3.event.transform);
-                }
-            }))
+            .call(this.zoomBehavior)
             .on('click', () => console.log('画布 click'))
             .on("dblclick.zoom", null);
 
@@ -299,6 +902,13 @@ export default class RelationChart {
             })
             .on('click', function (d) {
                 console.log('头像节点click')
+
+                // 如果处于聚焦模式，设置聚焦节点
+                if (that.isFocusMode) {
+                    that.setFocusNode(d);
+                    return;
+                }
+
                 // 展示方式2 ：浮窗展示
                 event = d3.event || window.event;
                 var pageX = event.pageX ? event.pageX : (event.clientX + (document.body.scrollLeft || document.documentElement.scrollLeft));
@@ -400,44 +1010,68 @@ export default class RelationChart {
 
     }
 
-    // 高亮元素及其相关的元素
+    // 高亮元素及其相关的元素（优化版：按关系距离分级透明度）
     highlightObject(obj) {
+        // 如果处于聚焦模式，不响应 hover 高亮
+        if (this.isFocusMode && this.focusedNode) {
+            return;
+        }
+
         if (obj) {
-            var objIndex = obj.index;
-            this.dependsNode = this.dependsNode.concat([objIndex]);
-            this.dependsLinkAndText = this.dependsLinkAndText.concat([objIndex]);
-            this.config.links.forEach((lkItem) => {
-                if (objIndex == lkItem['source']['index']) {
-                    this.dependsNode = this.dependsNode.concat([lkItem.target.index]);
-                } else if (objIndex == lkItem['target']['index']) {
-                    this.dependsNode = this.dependsNode.concat([lkItem.source.index]);
-                }
-            });
-
-            // 隐藏节点
-            this.SVG.selectAll('circle').filter((d) => {
-                return (this.dependsNode.indexOf(d.index) == -1);
-            }).transition().style('opacity', 0.1);
-            // 隐藏线
-            this.SVG.selectAll('.edge').filter((d) => {
-                // return true;
-                return ((this.dependsLinkAndText.indexOf(d.source.index) == -1) && (this.dependsLinkAndText.indexOf(d.target.index) == -1))
-            }).transition().style('opacity', 0.1);
-
+            this.applyDistanceHighlight(obj);
         } else {
-            // 取消高亮
-            // 恢复隐藏的线
-            this.SVG.selectAll('circle').filter(() => {
-                return true;
-            }).transition().style('opacity', 1);
-            // 恢复隐藏的线
-            this.SVG.selectAll('.edge').filter((d) => {
-                // return true;
-                return ((this.dependsLinkAndText.indexOf(d.source.index) == -1) && (this.dependsLinkAndText.indexOf(d.target.index) == -1))
-            }).transition().style('opacity', 1);
+            // 取消高亮 - 恢复所有元素透明度
+            this.SVG.selectAll('circle.circleclass')
+                .transition()
+                .duration(200)
+                .style('opacity', this.config.opacityLevels.normal);
+            this.SVG.selectAll('.edge')
+                .transition()
+                .duration(200)
+                .style('opacity', this.config.opacityLevels.normal);
             this.dependsNode = [];
             this.dependsLinkAndText = [];
         }
+    }
+
+    // 根据距离应用高亮效果（简化版：只区分直接关联和无关节点）
+    applyDistanceHighlight(targetNode) {
+        const objIndex = targetNode.index;
+        const opacity = this.config.opacityLevels;
+
+        // 收集一度关系节点
+        const directNodes = new Set([objIndex]);
+        const directLinks = new Set();
+
+        // 遍历所有连接，收集直接关系节点
+        this.config.links.forEach((link, linkIndex) => {
+            const sourceIdx = link.source.index;
+            const targetIdx = link.target.index;
+
+            if (objIndex === sourceIdx) {
+                directNodes.add(targetIdx);
+                directLinks.add(linkIndex);
+            } else if (objIndex === targetIdx) {
+                directNodes.add(sourceIdx);
+                directLinks.add(linkIndex);
+            }
+        });
+
+        // 应用节点透明度：直接关联清晰，其他透明
+        this.SVG.selectAll('circle.circleclass')
+            .transition()
+            .duration(200)
+            .style('opacity', (d) => {
+                return directNodes.has(d.index) ? opacity.direct : opacity.unrelated;
+            });
+
+        // 应用连线透明度：直接关联清晰，其他透明
+        this.SVG.selectAll('.edge')
+            .transition()
+            .duration(200)
+            .style('opacity', (d, i) => {
+                return directLinks.has(i) ? opacity.direct : opacity.unrelated;
+            });
     }
 }
 

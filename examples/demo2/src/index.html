@@ -20,9 +20,138 @@
             cursor: pointer;
             -webkit-tap-highlight-color: transparent;
         }
+
+        /* 搜索框容器 */
+        .search-container {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            z-index: 1000;
+            width: 280px;
+        }
+
+        .search-input-wrapper {
+            position: relative;
+        }
+
+        .search-input {
+            width: 100%;
+            padding: 10px 40px 10px 15px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+            outline: none;
+            box-sizing: border-box;
+            transition: border-color 0.2s;
+        }
+
+        .search-input:focus {
+            border-color: #4a90d9;
+            box-shadow: 0 0 0 3px rgba(74, 144, 217, 0.1);
+        }
+
+        .search-clear {
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 20px;
+            height: 20px;
+            border: none;
+            background: #ccc;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 12px;
+            color: #fff;
+            display: none;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .search-clear:hover {
+            background: #999;
+        }
+
+        .search-clear.show {
+            display: flex;
+        }
+
+        /* 搜索结果下拉列表 */
+        .search-results {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: #fff;
+            border: 1px solid #ddd;
+            border-top: none;
+            border-radius: 0 0 8px 8px;
+            max-height: 300px;
+            overflow-y: auto;
+            display: none;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+
+        .search-results.show {
+            display: block;
+        }
+
+        .search-result-item {
+            padding: 10px 15px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #f0f0f0;
+        }
+
+        .search-result-item:last-child {
+            border-bottom: none;
+        }
+
+        .search-result-item:hover,
+        .search-result-item.selected {
+            background: #f5f8fc;
+        }
+
+        .search-result-item.selected {
+            background: #e8f2ff;
+        }
+
+        .result-name {
+            font-size: 14px;
+            color: #333;
+        }
+
+        .result-name .highlight {
+            color: #4a90d9;
+            font-weight: bold;
+        }
+
+        .result-relation-count {
+            font-size: 12px;
+            color: #999;
+            background: #f5f5f5;
+            padding: 2px 8px;
+            border-radius: 10px;
+        }
+
+        .search-no-results {
+            padding: 15px;
+            text-align: center;
+            color: #999;
+            font-size: 14px;
+        }
     </style>
 </head>
 <body id="body">
-
+    <!-- 搜索框 -->
+    <div class="search-container">
+        <div class="search-input-wrapper">
+            <input type="text" class="search-input" placeholder="搜索节点..." autocomplete="off">
+            <button class="search-clear" title="清除">×</button>
+        </div>
+        <div class="search-results"></div>
+    </div>
 </body>
 </html>

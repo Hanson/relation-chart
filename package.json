@@ -9,7 +9,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/xiedajian/relation-chart.git"
+    "url": "git+https://github.com/hanson/relation-chart.git"
   },
   "files": [
     "dist",
@@ -23,12 +23,12 @@
     "javascript",
     "人物关系图"
   ],
-  "author": "xiedajian <172265972@qq.com>",
+  "author": "hanson",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/xiedajian/relation-chart/issues"
+    "url": "https://github.com/hanson/relation-chart/issues"
   },
-  "homepage": "https://github.com/xiedajian/relation-chart#readme",
+  "homepage": "https://github.com/hanson/relation-chart#readme",
   "devDependencies": {
     "@babel/core": "^7.3.4",
     "@babel/preset-env": "^7.3.4",
