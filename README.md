@@ -56,18 +56,9 @@
 
 ---
 
-[效果预览链接](https://hanson.github.io/relation-chart/examples/demo1/index.html)
+## 效果预览
 
-
-[预览](https://hanson.github.io/relation-chart/demo3.jpg)
-
-可进行拖拽，缩放
-
-[![预览](https://hanson.github.io/relation-chart/demo.jpg)](https://hanson.github.io/relation-chart/examples/demo1/index.html)
-
-高亮选中的节点
-
-[![高亮选中](https://hanson.github.io/relation-chart/demo2.jpg)](https://hanson.github.io/relation-chart/examples/demo1/index.html)
+![效果预览](./images/demo1.jpg)
 
 # install
 
